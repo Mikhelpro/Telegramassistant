@@ -1,0 +1,7 @@
+python-telegram-bot==21.5
+google-auth-oauthlib
+google-api-python-client
+APScheduler==3.10.4
+python-dotenv
+dateparser
+requests

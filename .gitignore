@@ -1,0 +1,32 @@
+# ── Secrets — NEVER commit these ──────────────────────────────────────────────
+.env
+credentials.json
+token.json
+
+# ── Runtime data files (personal data, auto-created by the bot) ───────────────
+inbox.json
+tasks.json
+notes.json
+expenses.json
+habits.json
+reminders.json
+autoposts.json
+memory.json
+files_db.json
+stranger_states.json
+
+# ── Python cache ──────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# ── Virtual environments ───────────────────────────────────────────────────────
+venv/
+env/
+.venv/
+
+# ── OS files ───────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
