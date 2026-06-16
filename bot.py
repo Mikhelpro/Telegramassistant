@@ -427,13 +427,64 @@ async def start(update, ctx):
 async def menu(update, ctx):
     await update.message.reply_text("Main Menu:", reply_markup=main_menu_keyboard())
 
+@owner_only
+async def clear_memory_cmd(update, ctx):
+    save_memory([])
+    await update.message.reply_text("🧹 AI conversation memory cleared.")
+
+@owner_only
+async def broadcast_cmd(update, ctx):
+    """Usage: /broadcast Your message here — sends to every stranger who has ever messaged the bot."""
+    text = update.message.text or ""
+    parts = text.split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        await update.message.reply_text(
+            "Usage:\n/broadcast Your message here\n\n"
+            "This sends your message to everyone who has ever messaged the bot."
+        )
+        return
+
+    message = parts[1].strip()
+    subs = load_json("subscribers.json")
+    if not isinstance(subs, list) or not subs:
+        await update.message.reply_text("No subscribers yet — nobody has messaged the bot.")
+        return
+
+    status_msg = await update.message.reply_text(f"📢 Broadcasting to {len(subs)} people...")
+    sent = 0
+    failed = 0
+    for sub in subs:
+        try:
+            await ctx.bot.send_message(chat_id=sub["user_id"], text=f"📢 Announcement from Mikhel:\n\n{message}")
+            sent += 1
+        except Exception as e:
+            failed += 1
+            logging.warning(f"Broadcast failed for {sub['user_id']}: {e}")
+        await asyncio.sleep(0.05)  # gentle pacing to avoid Telegram flood limits
+
+    await status_msg.edit_text(f"📢 Broadcast complete!\n✅ Sent: {sent}\n❌ Failed: {failed}")
+
+
+# ── Broadcast subscriber tracking ──────────────────────────────────────────────
+
+def record_stranger(user_id: int, name: str, username: str):
+    """Save every stranger who has ever interacted, for /broadcast."""
+    subs = load_json("subscribers.json")
+    if not isinstance(subs, list):
+        subs = []
+    if not any(s["user_id"] == user_id for s in subs):
+        subs.append({"user_id": user_id, "name": name, "username": username})
+        save_json("subscribers.json", subs)
+
 
 # ── Stranger /start ────────────────────────────────────────────────────────────
 
 async def stranger_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     name = user.first_name or "there"
+    username = user.username or "no username"
     ctx.user_data.clear()
+    record_stranger(user.id, name, username)
     await update.message.reply_text(
         f"Welcome {name}! 👋\n\n"
         f"I'm Mikhel's Assistant, the AI-powered assistant for Michael Wondwossen (Mikhel).\n\n"
@@ -443,6 +494,23 @@ async def stranger_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 # ── Stranger message handler ───────────────────────────────────────────────────
+
+# Simple in-memory rate limiter: user_id -> list of timestamps
+_stranger_message_times: dict = {}
+RATE_LIMIT_COUNT = 8       # max messages
+RATE_LIMIT_WINDOW = 60     # per this many seconds
+MAX_MESSAGE_LENGTH = 1000  # characters
+
+def _is_rate_limited(user_id: int) -> bool:
+    import time
+    now = time.time()
+    times = _stranger_message_times.get(user_id, [])
+    # keep only timestamps within the window
+    times = [t for t in times if now - t < RATE_LIMIT_WINDOW]
+    times.append(now)
+    _stranger_message_times[user_id] = times
+    return len(times) > RATE_LIMIT_COUNT
+
 
 async def stranger_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not bot_active:
@@ -457,6 +525,23 @@ async def stranger_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     username = user.username or "no username"
     text = (update.message.text or "").strip()
     channel_url = get_channel_url()
+
+    record_stranger(user.id, name, username)
+
+    # ── Rate limit check ──────────────────────────────────────────────────────
+    if _is_rate_limited(user.id):
+        await update.message.reply_text(
+            "⏳ You're sending messages too quickly. Please wait a moment and try again."
+        )
+        return
+
+    # ── Message length check ─────────────────────────────────────────────────
+    if len(text) > MAX_MESSAGE_LENGTH:
+        await update.message.reply_text(
+            f"⚠️ Message too long ({len(text)} characters). Please keep it under {MAX_MESSAGE_LENGTH} characters.",
+            reply_markup=stranger_main_keyboard()
+        )
+        return
 
     # ── Back to menu ──────────────────────────────────────────────────────────
     if text == "🔙 Back to Menu":
@@ -1256,17 +1341,25 @@ async def message_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         thinking_msg = await update.message.reply_text("Thinking... 🤔")
         memory = load_memory()
         history = [{"role": m["role"], "parts": m["parts"]} for m in memory[-18:]]
+        reply = None
         try:
             reply = await asyncio.get_running_loop().run_in_executor(
                 None, lambda: call_gemini_raw(text, history=history, max_tokens=800))
         except Exception as e:
             reply = f"AI error: {str(e)}"
+        await thinking_msg.delete()
+        # None means Gemini returned a rate limit after all retries
+        if not reply:
+            await update.message.reply_text(
+                "⚠️ Gemini is rate limited right now. Wait 30 seconds and try again.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Menu", callback_data="back_menu")]]))
+            return
+        # Only save to memory if we got a real answer
         memory.append({"role": "user", "parts": [{"text": text}]})
         memory.append({"role": "model", "parts": [{"text": reply}]})
         if len(memory) > 20:
             memory = memory[-20:]
         save_memory(memory)
-        await thinking_msg.delete()
         await update.message.reply_text(
             f"❓ {text}\n\n💬 {reply}",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Menu", callback_data="back_menu")]]))
@@ -1570,6 +1663,13 @@ def restore_autoposts(app):
 
 async def error_handler(update, context):
     logging.error(f"Exception: {context.error}")
+    try:
+        await context.bot.send_message(
+            chat_id=OWNER_ID,
+            text=f"⚠️ Bot error:\n{str(context.error)[:500]}"
+        )
+    except Exception:
+        pass  # avoid error loops if even this fails
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -1586,6 +1686,8 @@ async def main():
     app.add_handler(CommandHandler("start", start,          filters=filters.User(OWNER_ID)))
     app.add_handler(CommandHandler("start", stranger_start, filters=~filters.User(OWNER_ID)))
     app.add_handler(CommandHandler("menu",  menu,           filters=filters.User(OWNER_ID)))
+    app.add_handler(CommandHandler("clearmemory", clear_memory_cmd, filters=filters.User(OWNER_ID)))
+    app.add_handler(CommandHandler("broadcast", broadcast_cmd, filters=filters.User(OWNER_ID)))
 
     # ALL callback queries go through the router
     app.add_handler(CallbackQueryHandler(button_router))

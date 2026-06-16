@@ -14,6 +14,7 @@ autoposts.json
 memory.json
 files_db.json
 stranger_states.json
+subscribers.json
 
 # ── Python cache ──────────────────────────────────────────────────────────────
 __pycache__/

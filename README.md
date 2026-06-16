@@ -21,6 +21,9 @@ A dual-purpose Telegram bot built for **Michael Wondwossen (Mikhel)**:
 - 📁 **File Manager** — save and retrieve files/photos
 - 📥 **Inbox** — view messages from strangers and reply directly from the bot
 - 🌅 **Morning Briefing** — daily weather + tasks + calendar summary
+- ⚠️ **Error Notifications** — get DM'd automatically if the bot crashes or hits an error
+- 🧹 **`/clearmemory`** — reset AI conversation memory on demand
+- 📢 **`/broadcast`** — send an announcement to everyone who has ever messaged the bot
 
 ### Strangers (visitors)
 - Reply keyboard at the bottom (built-in, like mic/emoji row)
@@ -28,6 +31,8 @@ A dual-purpose Telegram bot built for **Michael Wondwossen (Mikhel)**:
 - AI (Gemini) only used for free-text questions
 - Two-way conversation thread — you reply, they get a Reply button, it comes back to your inbox
 - Buttons: Services, Pricing, Website Dev, Telegram Bot, FAQ, Social Media, Channel, Message Mikhel
+- 🛡️ **Rate limiting** — max 8 messages per 60 seconds per user, protects your Gemini quota from spam
+- 📏 **Message length cap** — messages over 1000 characters are rejected with a friendly notice
 
 ---
 
@@ -101,6 +106,28 @@ python bot.py
 7. Deploy
 
 The bot includes a built-in health server on port `10000` so Render keeps it alive.
+
+### Keeping it awake (important — free tier sleeps)
+
+Render's free tier puts your service to sleep after 15 minutes of inactivity, which means the bot won't respond until something wakes it up. Fix this for free:
+
+1. Go to [uptimerobot.com](https://uptimerobot.com) and create a free account
+2. Add a new monitor → **HTTP(s)**
+3. URL: your Render service URL (e.g. `https://your-app.onrender.com`)
+4. Monitoring interval: **5 minutes**
+5. Save
+
+UptimeRobot will ping your bot every 5 minutes, keeping it always awake.
+
+---
+
+## Security notes
+
+- All secrets (`BOT_TOKEN`, `OWNER_ID`, `GEMINI_API_KEY`, etc.) are read from environment variables — never hardcoded. Safe to make this repo public as long as `.env` is never committed.
+- Stranger messages are **rate limited** (max 8 per 60 seconds) to prevent spam from draining your Gemini API quota.
+- Stranger messages are **capped at 1000 characters** to prevent abuse via huge payloads.
+- The bot **DMs you automatically** if it crashes or hits an unhandled error, via the built-in error handler.
+- `inbox.json`, `tasks.json`, and other data files contain personal information — they're in `.gitignore` by default and should never be committed.
 
 ---
 
@@ -189,6 +216,37 @@ STRANGER_MENU_BUTTONS = [
 
 Add a new row or add to an existing row. Then handle the button text in `stranger_handler`.
 
+### Adjust rate limiting
+
+Find these constants near the top of `stranger_handler`:
+
+```python
+RATE_LIMIT_COUNT = 8       # max messages
+RATE_LIMIT_WINDOW = 60     # per this many seconds
+MAX_MESSAGE_LENGTH = 1000  # characters
+```
+
+Increase or decrease these based on your traffic and Gemini quota.
+
+### Owner commands
+
+| Command | What it does |
+|---|---|
+| `/start` | Activates the bot and shows the main menu |
+| `/menu` | Shows the main inline menu |
+| `/clearmemory` | Wipes the AI conversation memory (use if responses feel off-context) |
+| `/broadcast <message>` | Sends a message to everyone who has ever messaged the bot |
+
+### Broadcasting to all subscribers
+
+Every stranger who messages the bot is automatically recorded in `subscribers.json`. To announce something to everyone:
+
+```
+/broadcast New service launched! Check it out 🚀
+```
+
+The bot sends the message to each subscriber one at a time with a small delay to avoid Telegram's flood limits, then reports how many succeeded and failed.
+
 ---
 
 ## Project Structure
@@ -214,6 +272,7 @@ autoposts.json      # Scheduled channel posts
 memory.json         # AI conversation memory
 files_db.json       # Saved file references
 stranger_states.json  # Tracks stranger conversation state
+subscribers.json    # List of everyone who has messaged the bot (for /broadcast)
 ```
 
 ---
